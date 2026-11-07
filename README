@@ -1,7 +1,0 @@
-## Snake reinforcement learning with Q-learning, written in Nim.
-
-### Game core
-
-The only action the agent can take each tick is going forward or turning to a side.
-
-The agent is able to see if there's danger to its sides, which direction it's going and where the next food is located.
