@@ -1,8 +1,11 @@
 import std/[random, sequtils, strutils]
 
 type
+  Orientation* = enum
+    oriUp, oriDown, oriLeft, oriRight
+
   Direction* = enum
-    dirUp, dirDown, dirLeft, dirRight
+    dirStraight, dirRight, dirLeft
 
   Tile* = tuple[x: int, y: int]
   Snake* = seq[Tile]
@@ -11,36 +14,20 @@ type
     height*, width*: int
     snake*: Snake
     food*: Tile
-    direction*: Direction
+    orientation*: Orientation
     finished*: bool
 
 func head*(s: Snake): Tile = s[0]
 
-# Reversing direction like dirUp = -dirDown
+# Opposite turn: turning right is opposite of turning left
 proc `-`*(dir: Direction): Direction =
   case dir
-  of dirUp: dirDown
-  of dirDown: dirUp
-  of dirLeft: dirRight
+  of dirStraight: dirStraight
   of dirRight: dirLeft
+  of dirLeft: dirRight
 
 proc reverse*(dir: Direction): Direction = -dir
 proc opposite*(dir: Direction): Direction = -dir
-
-# Relative rotations (egocentric view)
-func turnRight*(dir: Direction): Direction =
-  case dir
-  of dirUp: dirRight
-  of dirRight: dirDown
-  of dirDown: dirLeft
-  of dirLeft: dirUp
-
-func turnLeft*(dir: Direction): Direction =
-  case dir
-  of dirUp: dirLeft
-  of dirLeft: dirDown
-  of dirDown: dirRight
-  of dirRight: dirUp
 
 # Computing when two tiles are the same with '=='
 proc `==`*(a, b: Tile): bool =
@@ -52,6 +39,32 @@ func isValidCoordinate*(game: Game, tile: Tile): bool =
 
 proc isDanger*(game: Game, tile: Tile): bool =
   not game.isValidCoordinate(tile) or (tile in game.snake)
+
+# Rotates an orientation given a relative direction (Straight, Right, Left)
+func applyDirection*(ori: Orientation, dir: Direction): Orientation =
+  case dir
+  of dirStraight:
+    ori
+  of dirRight:
+    case ori
+    of oriUp: oriRight
+    of oriRight: oriDown
+    of oriDown: oriLeft
+    of oriLeft: oriUp
+  of dirLeft:
+    case ori
+    of oriUp: oriLeft
+    of oriLeft: oriDown
+    of oriDown: oriRight
+    of oriRight: oriUp
+
+# Computes a step forward in an orientation
+func stepIn*(tile: Tile, ori: Orientation): Tile =
+  case ori
+  of oriUp: (x: tile.x, y: tile.y - 1)
+  of oriDown: (x: tile.x, y: tile.y + 1)
+  of oriLeft: (x: tile.x - 1, y: tile.y)
+  of oriRight: (x: tile.x + 1, y: tile.y)
 
 proc spawnFood*(game: Game) =
   ## Places food at a random unoccupied tile on the board.
@@ -74,23 +87,17 @@ proc newGame*(width: int = 20, height: int = 20): Game =
     height: height,
     snake: @[(x: width div 2, y: height div 2)], # Middle of the board
     food: (x: 0, y: 0),
-    direction: dirRight,
+    orientation: oriRight,
     finished: false
   )
   result.spawnFood()
 
-# Move a tile in a direction, returning the new coordinates
-func moved*(head: Tile, dir: Direction): Tile =
-  case dir
-  of dirUp: (x: head.x, y: head.y - 1)
-  of dirDown: (x: head.x, y: head.y + 1)
-  of dirLeft: (x: head.x - 1, y: head.y)
-  of dirRight: (x: head.x + 1, y: head.y)
-
-# Moves the snake in the given direction
+# Moves the snake in the relative direction: dirStraight, dirRight, or dirLeft
 proc move*(game: Game, dir: Direction) =
-  game.direction = dir
-  let newHead = game.snake.head.moved(dir)
+  let newOri = game.orientation.applyDirection(dir)
+  game.orientation = newOri
+  let newHead = game.snake.head.stepIn(newOri)
+
   if not game.isValidCoordinate(newHead):
     # Head crashed with wall
     game.finished = true
@@ -104,61 +111,81 @@ proc move*(game: Game, dir: Direction) =
     game.snake.insert(newHead, 0)
     game.spawnFood()
   else:
-    # Normal move. Remove the tail and add the new head.
+    # Normal move. Remove tail and insert new head.
     discard game.snake.pop()
     game.snake.insert(newHead, 0)
 
-# Returns a sequence of valid directions the snake can move in.
+# All 3 relative directions are always valid (reversing into itself is impossible)
 proc actions*(game: Game): seq[Direction] =
-  toSeq({dirUp, dirDown, dirLeft, dirRight} - {-game.direction})
+  @[dirStraight, dirRight, dirLeft]
 
 func score*(game: Game): int = game.snake.len - 1
 
 func isFinished*(game: Game): bool = game.finished
 
-proc canAdvance*(game: Game, dir: Direction): bool =
-  dir != -game.direction
-
-# Change state function
-proc advance*(game: Game, dir: Direction) =
+proc advance*(game: Game, dir: Direction = dirStraight) =
   if game.isFinished():
     raise newException(ValueError, "Game is already finished.")
-  if dir == -game.direction:
-    raise newException(ValueError, "Cannot move in the opposite direction of the current movement.")
   game.move(dir)
 
-# Do nothing, keep going
-proc advance*(game: Game) =
-  game.advance(game.direction)
-
-# Gold Standard 11-boolean sensory inputs:
-# [0..2] Danger: Straight, Right, Left (immediate danger in next tile)
-# [3..6] Current Direction: Up, Down, Left, Right
-# [7..10] Food Location: Up, Down, Left, Right
+# Gold Standard 11-boolean sensory inputs (egocentric view):
+# [0..2] Danger: Straight, Right, Left
+# [3..6] Current Orientation: Up, Down, Left, Right
+# [7..10] Relative Food Location: Straight (Ahead), Right, Left, Behind
 proc getSensoryInputs*(game: Game): seq[float] =
   result = newSeq[float](11)
   if game.snake.len == 0:
     return
 
   let head = game.snake[0]
-  let dir = game.direction
+  let ori = game.orientation
 
   # 1. Immediate Dangers (Straight, Right, Left)
-  result[0] = (if game.isDanger(head.moved(dir)): 1.0 else: 0.0)
-  result[1] = (if game.isDanger(head.moved(dir.turnRight)): 1.0 else: 0.0)
-  result[2] = (if game.isDanger(head.moved(dir.turnLeft)): 1.0 else: 0.0)
+  let straightTile = head.stepIn(ori.applyDirection(dirStraight))
+  let rightTile = head.stepIn(ori.applyDirection(dirRight))
+  let leftTile = head.stepIn(ori.applyDirection(dirLeft))
 
-  # 2. Current Direction (One-Hot)
-  result[3] = (if dir == dirUp: 1.0 else: 0.0)
-  result[4] = (if dir == dirDown: 1.0 else: 0.0)
-  result[5] = (if dir == dirLeft: 1.0 else: 0.0)
-  result[6] = (if dir == dirRight: 1.0 else: 0.0)
+  result[0] = (if game.isDanger(straightTile): 1.0 else: 0.0)
+  result[1] = (if game.isDanger(rightTile): 1.0 else: 0.0)
+  result[2] = (if game.isDanger(leftTile): 1.0 else: 0.0)
 
-  # 3. Food Location relative to head
-  result[7] = (if game.food.y < head.y: 1.0 else: 0.0) # Food is Up
-  result[8] = (if game.food.y > head.y: 1.0 else: 0.0) # Food is Down
-  result[9] = (if game.food.x < head.x: 1.0 else: 0.0) # Food is Left
-  result[10] = (if game.food.x > head.x: 1.0 else: 0.0) # Food is Right
+  # 2. Current Orientation (One-Hot)
+  result[3] = (if ori == oriUp: 1.0 else: 0.0)
+  result[4] = (if ori == oriDown: 1.0 else: 0.0)
+  result[5] = (if ori == oriLeft: 1.0 else: 0.0)
+  result[6] = (if ori == oriRight: 1.0 else: 0.0)
+
+  # 3. Relative Food Position
+  let dx = game.food.x - head.x
+  let dy = game.food.y - head.y
+
+  var foodAhead, foodRight, foodLeft, foodBehind = false
+  case ori
+  of oriUp:
+    foodAhead = dy < 0
+    foodBehind = dy > 0
+    foodRight = dx > 0
+    foodLeft = dx < 0
+  of oriDown:
+    foodAhead = dy > 0
+    foodBehind = dy < 0
+    foodRight = dx < 0
+    foodLeft = dx > 0
+  of oriRight:
+    foodAhead = dx > 0
+    foodBehind = dx < 0
+    foodRight = dy > 0
+    foodLeft = dy < 0
+  of oriLeft:
+    foodAhead = dx < 0
+    foodBehind = dx > 0
+    foodRight = dy < 0
+    foodLeft = dy > 0
+
+  result[7] = (if foodAhead: 1.0 else: 0.0)
+  result[8] = (if foodRight: 1.0 else: 0.0)
+  result[9] = (if foodLeft: 1.0 else: 0.0)
+  result[10] = (if foodBehind: 1.0 else: 0.0)
 
 # Print functions for Game
 proc `$`*(game: Game): string =
@@ -169,7 +196,11 @@ proc `$`*(game: Game): string =
     for x in 0 ..< game.width:
       let tile: Tile = (x: x, y: y)
       if game.snake.len > 0 and tile == game.snake[0]:
-        result.add("H")
+        case game.orientation
+        of oriUp: result.add("^")
+        of oriDown: result.add("v")
+        of oriLeft: result.add("<")
+        of oriRight: result.add(">")
       elif tile in game.snake:
         result.add("o")
       elif tile == game.food:
@@ -178,7 +209,7 @@ proc `$`*(game: Game): string =
         result.add(" ")
     result.add("|\n")
   result.add("+" & repeat('-', game.width) & "+\n")
-  result.add("Score: " & $game.score() & " | Dir: " & $game.direction & " | Status: " & (if game.finished: "Game Over" else: "Alive"))
+  result.add("Score: " & $game.score() & " | Ori: " & $game.orientation & " | Status: " & (if game.finished: "Game Over" else: "Alive"))
 
 proc print*(game: Game) =
   echo $game
