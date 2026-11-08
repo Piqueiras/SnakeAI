@@ -28,7 +28,7 @@ proc keyToRelativeDirection(key: string, ori: Orientation): (bool, Direction) =
     of oriUp: return (true, dirStraight)
     of oriRight: return (true, dirLeft)
     of oriLeft: return (true, dirRight)
-    of oriDown: return (false, dirStraight) # Ignore opposite
+    of oriDown: return (false, dirStraight)
   of "ArrowDown":
     case ori
     of oriDown: return (true, dirStraight)
@@ -55,6 +55,14 @@ proc serializeState(s: ServerState): JsonNode =
   for tile in s.game.snake:
     snakeNodes.add(%*{"x": tile.x, "y": tile.y})
 
+  var lossNodes: seq[JsonNode] = @[]
+  for val in s.agent.lossHistory:
+    lossNodes.add(%*val)
+
+  var scoreNodes: seq[JsonNode] = @[]
+  for val in s.agent.scoreHistory:
+    scoreNodes.add(%*val)
+
   result = %*{
     "width": s.game.width,
     "height": s.game.height,
@@ -65,6 +73,10 @@ proc serializeState(s: ServerState): JsonNode =
     "mode": s.mode,
     "episode": s.agent.episode,
     "epsilon": s.agent.epsilon,
+    "currentLoss": s.agent.currentLoss,
+    "lastEpisodeLoss": s.agent.lastEpisodeLoss,
+    "lossHistory": lossNodes,
+    "scoreHistory": scoreNodes,
     "snake": snakeNodes,
     "food": {"x": s.game.food.x, "y": s.game.food.y},
     "qValues": s.lastQValues,
@@ -109,7 +121,7 @@ proc stepSimulation(s: ServerState) =
 
     let nextState = s.game.getSensoryInputs()
     s.agent.remember(state, action, reward, nextState, done)
-    s.agent.trainShortMemory(state, action, reward, nextState, done)
+    discard s.agent.trainShortMemory(state, action, reward, nextState, done)
 
     if done:
       s.agent.onGameEnd(s.game.score())
@@ -124,7 +136,7 @@ proc stepSimulation(s: ServerState) =
       s.hasPendingManualDir = false
 
     s.lastAction = act
-    # Also evaluate network Q-values in manual mode so user can see what the agent would predict!
+    # Also evaluate network Q-values in manual mode so user can see what the agent predicts
     let state = s.game.getSensoryInputs()
     let (_, qVals) = s.agent.selectAction(state, explore = false)
     s.lastQValues = qVals
@@ -213,7 +225,7 @@ proc startWebServer*(port: int = 8080, staticDir: string = "") {.async.} =
           except Exception as e:
             echo "Error parsing action body: ", e.msg
 
-        # Immediately execute step on manual action for instant responsiveness
+        # Immediately execute step on manual action
         state.stepSimulation()
         let jsonStr = $state.serializeState()
         let headers = newHttpHeaders([("Content-Type", "application/json")])
@@ -246,7 +258,7 @@ proc startWebServer*(port: int = 8080, staticDir: string = "") {.async.} =
 
   echo "=========================================================="
   echo "🚀 Snake IA Web Interface running at: http://localhost:", port
-  echo "🎮 Mode: Manual and Agent (DQN Q-Learning)"
+  echo "🎮 Mode: Manual and Agent (DQN Q-Learning with Backpropagation)"
   echo "=========================================================="
   server.listen(Port(port))
   while true:

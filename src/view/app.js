@@ -3,6 +3,9 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
+const progressCanvas = document.getElementById('progressCanvas');
+const pCtx = progressCanvas ? progressCanvas.getContext('2d') : null;
+
 let gameState = null;
 let isPaused = false;
 let targetFps = 15;
@@ -14,6 +17,10 @@ const currentScoreEl = document.getElementById('currentScore');
 const highScoreEl = document.getElementById('highScore');
 const episodeCountEl = document.getElementById('episodeCount');
 const epsilonValueEl = document.getElementById('epsilonValue');
+
+const currentLossVal = document.getElementById('currentLossVal');
+const currentScoreGraphVal = document.getElementById('currentScoreGraphVal');
+const chartEpisodeCount = document.getElementById('chartEpisodeCount');
 
 const valStraight = document.getElementById('valStraight');
 const valRight = document.getElementById('valRight');
@@ -146,6 +153,17 @@ function updateDashboard(state) {
   episodeCountEl.textContent = state.episode;
   epsilonValueEl.textContent = state.epsilon.toFixed(2);
 
+  if (currentLossVal) {
+    const lossDisplay = state.lastEpisodeLoss > 0 ? state.lastEpisodeLoss : state.currentLoss;
+    currentLossVal.textContent = lossDisplay.toFixed(4);
+  }
+  if (currentScoreGraphVal) {
+    currentScoreGraphVal.textContent = state.score;
+  }
+  if (chartEpisodeCount) {
+    chartEpisodeCount.textContent = state.episode;
+  }
+
   if (state.mode !== currentMode) {
     currentMode = state.mode;
     applyModeUI(currentMode);
@@ -180,6 +198,118 @@ function updateDashboard(state) {
     barRight.className = 'q-bar-fill' + (state.lastAction === 'dirRight' ? ' q-bar-selected' : '');
     barLeft.className = 'q-bar-fill' + (state.lastAction === 'dirLeft' ? ' q-bar-selected' : '');
   }
+
+  // Update Dual Progress Chart
+  if (pCtx && state.lossHistory && state.scoreHistory) {
+    renderProgressChart(state.lossHistory, state.scoreHistory);
+  }
+}
+
+// --- Dual Progress Chart Rendering (All episodes from the start) ---
+
+function renderProgressChart(losses, scores) {
+  if (!pCtx) return;
+  const w = progressCanvas.width;
+  const h = progressCanvas.height;
+
+  pCtx.clearRect(0, 0, w, h);
+
+  const padLeft = 35;
+  const padRight = 15;
+  const padTop = 15;
+  const padBottom = 20;
+  const plotW = w - padLeft - padRight;
+  const plotH = h - padTop - padBottom;
+
+  // Background grid lines
+  pCtx.strokeStyle = '#151d30';
+  pCtx.lineWidth = 1;
+  for (let y = 0; y <= 4; y++) {
+    const py = padTop + (plotH / 4) * y;
+    pCtx.beginPath();
+    pCtx.moveTo(padLeft, py);
+    pCtx.lineTo(w - padRight, py);
+    pCtx.stroke();
+  }
+
+  if (losses.length < 1) {
+    pCtx.fillStyle = '#64748b';
+    pCtx.font = '12px sans-serif';
+    pCtx.textAlign = 'center';
+    pCtx.fillText('Awaiting first episode completion to plot training curves...', w / 2, h / 2);
+    return;
+  }
+
+  const n = losses.length;
+
+  // Find max values for normalization
+  let maxLoss = 0.001;
+  let maxScore = 1;
+  for (let i = 0; i < n; i++) {
+    if (losses[i] > maxLoss) maxLoss = losses[i];
+    if (scores[i] > maxScore) maxScore = scores[i];
+  }
+
+  // Draw X/Y axes
+  pCtx.strokeStyle = '#2a375a';
+  pCtx.lineWidth = 1.5;
+  pCtx.beginPath();
+  pCtx.moveTo(padLeft, padTop);
+  pCtx.lineTo(padLeft, h - padBottom);
+  pCtx.lineTo(w - padRight, h - padBottom);
+  pCtx.stroke();
+
+  // Y-axis labels
+  pCtx.fillStyle = '#64748b';
+  pCtx.font = '10px monospace';
+  pCtx.textAlign = 'right';
+  pCtx.fillText(maxLoss.toFixed(1), padLeft - 4, padTop + 8);
+  pCtx.fillText('0', padLeft - 4, h - padBottom);
+
+  // Helper to get coordinates
+  function getX(i) {
+    if (n === 1) return padLeft + plotW / 2;
+    return padLeft + (i / (n - 1)) * plotW;
+  }
+
+  // 1. Plot Loss curve (Red #f87171)
+  pCtx.strokeStyle = '#f87171';
+  pCtx.lineWidth = 2;
+  pCtx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const x = getX(i);
+    const y = (h - padBottom) - (losses[i] / maxLoss) * plotH;
+    if (i === 0) pCtx.moveTo(x, y);
+    else pCtx.lineTo(x, y);
+  }
+  pCtx.stroke();
+
+  // 2. Plot Score curve (Cyan #38bdf8)
+  pCtx.strokeStyle = '#38bdf8';
+  pCtx.lineWidth = 2;
+  pCtx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const x = getX(i);
+    const y = (h - padBottom) - (scores[i] / maxScore) * plotH;
+    if (i === 0) pCtx.moveTo(x, y);
+    else pCtx.lineTo(x, y);
+  }
+  pCtx.stroke();
+
+  // Draw dot on latest points
+  const lastX = getX(n - 1);
+  const lastLossY = (h - padBottom) - (losses[n - 1] / maxLoss) * plotH;
+  const lastScoreY = (h - padBottom) - (scores[n - 1] / maxScore) * plotH;
+
+  pCtx.fillStyle = '#f87171';
+  pCtx.beginPath();
+  pCtx.arc(lastX, lastLossY, 4, 0, Math.PI * 2);
+  pCtx.fill();
+
+  pCtx.fillStyle = '#38bdf8';
+  pCtx.beginPath();
+  pCtx.arc(lastX, lastScoreY, 4, 0, Math.PI * 2);
+  pCtx.fill();
 }
 
 // --- Canvas Rendering ---

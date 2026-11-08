@@ -45,10 +45,11 @@ proc backprop*(
     inputs: openArray[float],
     targets: openArray[float],
     learningRate: float = 0.01
-) =
+): float =
   ## Trains the network on a single sample using backpropagation and gradient descent.
+  ## Returns the Mean Squared Error (MSE) loss.
   if net.len == 0:
-    return
+    return 0.0
 
   # 1. Forward pass while keeping track of inputs to each layer
   var layerInputs = newSeq[seq[float]](net.len)
@@ -60,10 +61,12 @@ proc backprop*(
 
   let lastIdx = net.high
 
-  # 2. Compute deltas for the output layer
+  # 2. Compute deltas and MSE loss for the output layer
+  var totalLoss = 0.0
   for k in 0 ..< net[lastIdx].len:
     let n = net[lastIdx][k]
     let err = targets[k] - n.output
+    totalLoss += err * err
     n.delta = err * applyDerivative(n.activation, n.output)
 
   # 3. Backpropagate deltas through hidden layers (from lastIdx - 1 down to 0)
@@ -84,17 +87,22 @@ proc backprop*(
         n.weights[i] += learningRate * n.delta * inVals[i]
       n.bias += learningRate * n.delta
 
+  return totalLoss / float(net[lastIdx].len)
+
 proc trainStep*(
     net: Network,
     state: openArray[float],
     actionIdx: int,
     targetValue: float,
     learningRate: float = 0.01
-) =
+): float =
   ## Updates the network weights specifically for the chosen action's Q-value target.
+  ## Returns the squared error (MSE) loss for this step.
   var currentQ = net.forward(state)
+  let err = targetValue - currentQ[actionIdx]
   currentQ[actionIdx] = targetValue
-  net.backprop(state, currentQ, learningRate)
+  discard net.backprop(state, currentQ, learningRate)
+  return err * err
 
 proc `$`*(net: Network): string =
   result = &"Network ({net.len} layers):\n"
